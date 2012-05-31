@@ -15,7 +15,7 @@ conflicts=('mupdf')
 #md5sums=('d30f1ecfd812aedcfa9305f621d3cb51')
 install=mupdf-git.install
 
-_gitroot="git@github.com:hoangtran/mupdf.git"
+_gitroot="git://github.com/hoangtran/mupdf.git"
 _gitname="mupdf"
 
 build() {
