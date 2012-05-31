@@ -172,11 +172,11 @@ libdir ?= $(prefix)/lib
 incdir ?= $(prefix)/include
 mandir ?= $(prefix)/share/man
 
-install: $(FITZ_LIB_A) $(MUVIEW) $(MUDRAW) $(MUBUSY)
+install: $(FITZ_LIB_A) $(FITZ_LIB_SO) $(MUVIEW) $(MUDRAW) $(MUBUSY)
 	install -d $(bindir) $(libdir) $(incdir) $(mandir)/man1
 	install $(FITZ_LIB_A) $(libdir)
 	install $(FITZ_LIB_SO) $(libdir)
-	install $(FITZ_LIB_SO%%/*).so $(libdir)
+	install $(OUT)/libfitz.so $(libdir)
 	install fitz/memento.h fitz/fitz.h fitz/fitz-internal.h pdf/mupdf.h \
 		pdf/mupdf-internal.h xps/muxps.h cbz/mucbz.h $(incdir)
 	install $(MUVIEW) $(MUDRAW) $(MUBUSY) $(bindir)
