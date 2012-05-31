@@ -12,7 +12,7 @@ default: all
 # Do not specify CFLAGS or LIBS on the make invocation line - specify
 # XCFLAGS or XLIBS instead. Make ignores any lines in the makefile that
 # set a variable that was set on the command line.
-CFLAGS += $(XCFLAGS) -Ifitz -Ipdf -Ixps -Icbz -Iscripts
+CFLAGS += $(XCFLAGS) -Ifitz -Ipdf -Ixps -Icbz -Iscripts -fPIC
 LIBS += $(XLIBS) -lfreetype -ljbig2dec -ljpeg -lopenjpeg -lz -lm
 
 include Makerules
@@ -34,6 +34,7 @@ endif
 
 CC_CMD = $(QUIET_CC) $(CC) $(CFLAGS) -o $@ -c $<
 AR_CMD = $(QUIET_AR) $(AR) cru $@ $^
+SO_CMD = $(QUIET_LINK) $(CC) -fPIC --shared -Wl,-soname -Wl,`basename $@` $^ -o $@ 
 LINK_CMD = $(QUIET_LINK) $(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
 MKDIR_CMD = $(QUIET_MKDIR) mkdir -p $@
 
@@ -73,7 +74,8 @@ $(OUT)/%.o : scripts/%.c | $(OUT)
 
 # --- Fitz, MuPDF, MuXPS and MuCBZ library ---
 
-FITZ_LIB := $(OUT)/libfitz.a
+FITZ_LIB_A := $(OUT)/libfitz.a
+FITZ_LIB_SO := $(OUT)/libfitz.so.1.0
 
 FITZ_SRC := $(notdir $(wildcard fitz/*.c draw/*.c))
 FITZ_SRC := $(filter-out draw_simple_scale.c, $(FITZ_SRC))
@@ -81,12 +83,18 @@ MUPDF_SRC := $(notdir $(wildcard pdf/*.c))
 MUXPS_SRC := $(notdir $(wildcard xps/*.c))
 MUCBZ_SRC := $(notdir $(wildcard cbz/*.c))
 
-$(FITZ_LIB) : $(addprefix $(OUT)/, $(FITZ_SRC:%.c=%.o))
-$(FITZ_LIB) : $(addprefix $(OUT)/, $(MUPDF_SRC:%.c=%.o))
-$(FITZ_LIB) : $(addprefix $(OUT)/, $(MUXPS_SRC:%.c=%.o))
-$(FITZ_LIB) : $(addprefix $(OUT)/, $(MUCBZ_SRC:%.c=%.o))
+FITZ_OBJECT_FILES := $(addprefix $(OUT)/, $(FITZ_SRC:%.c=%.o)) \
+                     $(addprefix $(OUT)/, $(MUPDF_SRC:%.c=%.o)) \
+                     $(addprefix $(OUT)/, $(MUXPS_SRC:%.c=%.o)) \
+                     $(addprefix $(OUT)/, $(MUCBZ_SRC:%.c=%.o))
 
-libs: $(FITZ_LIB) $(THIRD_LIBS)
+libs: $(FITZ_LIB_A) $(FITZ_LIB_SO) $(THIRD_LIBS)
+$(FITZ_LIB_A) : $(FITZ_OBJECT_FILES)
+$(FITZ_LIB_SO) : $(FITZ_OBJECT_FILES)
+
+$(FITZ_LIB_SO) :
+	$(SO_CMD)
+	@cd $(OUT) && ln -s `basename $@` libfitz.so
 
 # --- Generated CMAP and FONT files ---
 
@@ -134,14 +142,14 @@ $(OUT)/cmapdump.o : pdf/pdf_cmap.c pdf/pdf_cmap_parse.c
 # --- Tools and Apps ---
 
 MUDRAW := $(addprefix $(OUT)/, mudraw)
-$(MUDRAW) : $(FITZ_LIB) $(THIRD_LIBS)
+$(MUDRAW) : $(FITZ_LIB_A) $(THIRD_LIBS)
 
 MUBUSY := $(addprefix $(OUT)/, mubusy)
-$(MUBUSY) : $(addprefix $(OUT)/, mupdfclean.o mupdfextract.o mupdfinfo.o mupdfposter.o mupdfshow.o) $(FITZ_LIB) $(THIRD_LIBS)
+$(MUBUSY) : $(addprefix $(OUT)/, mupdfclean.o mupdfextract.o mupdfinfo.o mupdfposter.o mupdfshow.o) $(FITZ_LIB_A) $(THIRD_LIBS)
 
 ifeq "$(NOX11)" ""
 MUVIEW := $(OUT)/mupdf
-$(MUVIEW) : $(FITZ_LIB) $(THIRD_LIBS)
+$(MUVIEW) : $(FITZ_LIB_A) $(THIRD_LIBS)
 $(MUVIEW) : $(addprefix $(OUT)/, x11_main.o x11_image.o pdfapp.o)
 	$(LINK_CMD) $(X11_LIBS)
 endif
@@ -164,16 +172,19 @@ libdir ?= $(prefix)/lib
 incdir ?= $(prefix)/include
 mandir ?= $(prefix)/share/man
 
-install: $(FITZ_LIB) $(MUVIEW) $(MUDRAW) $(MUBUSY)
+install: $(FITZ_LIB_A) $(MUVIEW) $(MUDRAW) $(MUBUSY)
 	install -d $(bindir) $(libdir) $(incdir) $(mandir)/man1
-	install $(FITZ_LIB) $(libdir)
-	install fitz/memento.h fitz/fitz.h pdf/mupdf.h xps/muxps.h cbz/mucbz.h $(incdir)
+	install $(FITZ_LIB_A) $(libdir)
+	install $(FITZ_LIB_SO) $(libdir)
+	install $(FITZ_LIB_SO%%/*).so $(libdir)
+	install fitz/memento.h fitz/fitz.h fitz/fitz-internal.h pdf/mupdf.h \
+		pdf/mupdf-internal.h xps/muxps.h cbz/mucbz.h $(incdir)
 	install $(MUVIEW) $(MUDRAW) $(MUBUSY) $(bindir)
 	install $(wildcard apps/man/*.1) $(mandir)/man1
 
 # --- Clean and Default ---
 
-all: $(THIRD_LIBS) $(FITZ_LIB) $(MUVIEW) $(MUDRAW) $(MUBUSY)
+all: $(THIRD_LIBS) $(FITZ_LIB_A) $(FITZ_LIB_SO) $(MUVIEW) $(MUDRAW) $(MUBUSY)
 
 clean:
 	rm -rf $(OUT)
