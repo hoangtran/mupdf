@@ -176,14 +176,14 @@ showglobalinfo(void)
 	if (obj)
 	{
 		printf("Info object (%d %d R):\n", pdf_to_num(obj), pdf_to_gen(obj));
-		pdf_print_obj(pdf_resolve_indirect(obj));
+		pdf_fprint_obj(stdout, pdf_resolve_indirect(obj), 0);
 	}
 
 	obj = pdf_dict_gets(xref->trailer, "Encrypt");
 	if (obj)
 	{
 		printf("\nEncryption object (%d %d R):\n", pdf_to_num(obj), pdf_to_gen(obj));
-		pdf_print_obj(pdf_resolve_indirect(obj));
+		pdf_fprint_obj(stdout, pdf_resolve_indirect(obj), 0);
 	}
 
 	printf("\nPages: %d\n\n", pagecount);
@@ -201,6 +201,16 @@ gatherdimensions(int page, pdf_obj *pageref, pdf_obj *pageobj)
 		return;
 
 	bbox = pdf_to_rect(ctx, obj);
+
+	obj = pdf_dict_gets(pageobj, "UserUnit");
+	if (pdf_is_real(obj))
+	{
+		float unit = pdf_to_real(obj);
+		bbox.x0 *= unit;
+		bbox.y0 *= unit;
+		bbox.x1 *= unit;
+		bbox.y1 *= unit;
+	}
 
 	for (j = 0; j < dims; j++)
 		if (!memcmp(dim[j].u.dim.bbox, &bbox, sizeof (fz_rect)))
@@ -891,7 +901,7 @@ showinfo(char *filename, int show, char *pagelist)
 
 	pagecount = pdf_count_pages(xref);
 	spec = fz_strsep(&pagelist, ",");
-	while (spec)
+	while (spec && pagecount)
 	{
 		dash = strchr(spec, '-');
 
@@ -911,8 +921,8 @@ showinfo(char *filename, int show, char *pagelist)
 		if (spage > epage)
 			page = spage, spage = epage, epage = page;
 
-		spage = CLAMP(spage, 1, pagecount);
-		epage = CLAMP(epage, 1, pagecount);
+		spage = fz_clampi(spage, 1, pagecount);
+		epage = fz_clampi(epage, 1, pagecount);
 
 		if (allpages)
 			printf("Retrieving info from pages %d-%d...\n", spage, epage);

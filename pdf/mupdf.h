@@ -17,11 +17,13 @@ pdf_obj *pdf_new_null(fz_context *ctx);
 pdf_obj *pdf_new_bool(fz_context *ctx, int b);
 pdf_obj *pdf_new_int(fz_context *ctx, int i);
 pdf_obj *pdf_new_real(fz_context *ctx, float f);
-pdf_obj *fz_new_name(fz_context *ctx, char *str);
+pdf_obj *pdf_new_name(fz_context *ctx, char *str);
 pdf_obj *pdf_new_string(fz_context *ctx, char *str, int len);
 pdf_obj *pdf_new_indirect(fz_context *ctx, int num, int gen, void *doc);
 pdf_obj *pdf_new_array(fz_context *ctx, int initialcap);
 pdf_obj *pdf_new_dict(fz_context *ctx, int initialcap);
+pdf_obj *pdf_new_rect(fz_context *ctx, fz_rect *rect);
+pdf_obj *pdf_new_matrix(fz_context *ctx, fz_matrix *mtx);
 pdf_obj *pdf_copy_array(fz_context *ctx, pdf_obj *array);
 pdf_obj *pdf_copy_dict(fz_context *ctx, pdf_obj *dict);
 
@@ -70,16 +72,21 @@ pdf_obj *pdf_dict_get_key(pdf_obj *dict, int idx);
 pdf_obj *pdf_dict_get_val(pdf_obj *dict, int idx);
 pdf_obj *pdf_dict_get(pdf_obj *dict, pdf_obj *key);
 pdf_obj *pdf_dict_gets(pdf_obj *dict, char *key);
+pdf_obj *pdf_dict_getp(pdf_obj *dict, char *key);
 pdf_obj *pdf_dict_getsa(pdf_obj *dict, char *key, char *abbrev);
-void fz_dict_put(pdf_obj *dict, pdf_obj *key, pdf_obj *val);
+void pdf_dict_put(pdf_obj *dict, pdf_obj *key, pdf_obj *val);
 void pdf_dict_puts(pdf_obj *dict, char *key, pdf_obj *val);
+void pdf_dict_putp(pdf_obj *dict, char *key, pdf_obj *val);
 void pdf_dict_del(pdf_obj *dict, pdf_obj *key);
 void pdf_dict_dels(pdf_obj *dict, char *key);
 void pdf_sort_dict(pdf_obj *dict);
 
 int pdf_fprint_obj(FILE *fp, pdf_obj *obj, int tight);
+
+#ifndef NDEBUG
 void pdf_print_obj(pdf_obj *obj);
 void pdf_print_ref(pdf_obj *obj);
+#endif
 
 char *pdf_to_utf8(fz_context *ctx, pdf_obj *src);
 unsigned short *pdf_to_ucs2(fz_context *ctx, pdf_obj *src); /* sumatrapdf */
@@ -160,7 +167,7 @@ pdf_document *pdf_open_document(fz_context *ctx, const char *filename);
 	fz_open_file_w or fz_open_fd for opening a stream, and
 	fz_close for closing an open stream.
 */
-pdf_document *pdf_open_document_with_stream(fz_stream *file);
+pdf_document *pdf_open_document_with_stream(fz_context *ctx, fz_stream *file);
 
 /*
 	pdf_close_document: Closes and frees an opened PDF document.

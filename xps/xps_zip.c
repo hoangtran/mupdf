@@ -302,8 +302,8 @@ xps_find_and_read_zip_dir(xps_document *doc)
 	fz_seek(doc->file, 0, SEEK_END);
 	file_size = fz_tell(doc->file);
 
-	maxback = MIN(file_size, 0xFFFF + sizeof buf);
-	back = MIN(maxback, sizeof buf);
+	maxback = fz_mini(file_size, 0xFFFF + sizeof buf);
+	back = fz_mini(maxback, sizeof buf);
 
 	while (back < maxback)
 	{
@@ -576,9 +576,8 @@ xps_open_document_with_directory(fz_context *ctx, char *directory)
 }
 
 xps_document *
-xps_open_document_with_stream(fz_stream *file)
+xps_open_document_with_stream(fz_context *ctx, fz_stream *file)
 {
-	fz_context *ctx = file->ctx;
 	xps_document *doc;
 
 	doc = fz_malloc_struct(ctx, xps_document);
@@ -624,14 +623,16 @@ xps_open_document(fz_context *ctx, char *filename)
 
 	fz_try(ctx)
 	{
-		doc = xps_open_document_with_stream(file);
+		doc = xps_open_document_with_stream(ctx, file);
+	}
+	fz_always(ctx)
+	{
+		fz_close(file);
 	}
 	fz_catch(ctx)
 	{
-		fz_close(file);
 		fz_throw(ctx, "cannot load document '%s'", filename);
 	}
-	fz_close(file);
 	return doc;
 }
 
@@ -714,7 +715,7 @@ static int xps_meta(fz_document *doc_, int key, void *ptr, int size)
 {
 	xps_document *doc = (xps_document *)doc_;
 
-	doc = doc;
+	UNUSED(doc);
 
 	switch(key)
 	{

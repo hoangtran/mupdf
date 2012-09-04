@@ -263,8 +263,8 @@ cbz_read_zip_dir(cbz_document *doc)
 	fz_seek(file, 0, 2);
 	filesize = fz_tell(file);
 
-	maxback = MIN(filesize, 0xFFFF + sizeof buf);
-	back = MIN(maxback, sizeof buf);
+	maxback = fz_mini(filesize, 0xFFFF + sizeof buf);
+	back = fz_mini(maxback, sizeof buf);
 
 	while (back < maxback)
 	{
@@ -285,9 +285,8 @@ cbz_read_zip_dir(cbz_document *doc)
 }
 
 cbz_document *
-cbz_open_document_with_stream(fz_stream *file)
+cbz_open_document_with_stream(fz_context *ctx, fz_stream *file)
 {
-	fz_context *ctx = file->ctx;
 	cbz_document *doc;
 
 	doc = fz_malloc_struct(ctx, cbz_document);
@@ -323,7 +322,7 @@ cbz_open_document(fz_context *ctx, char *filename)
 		fz_throw(ctx, "cannot open file '%s': %s", filename, strerror(errno));
 
 	fz_try(ctx) {
-		doc = cbz_open_document_with_stream(file);
+		doc = cbz_open_document_with_stream(ctx, file);
 	} fz_always(ctx) {
 		fz_close(file);
 	} fz_catch(ctx) {
@@ -494,7 +493,7 @@ static int cbz_meta(fz_document *doc_, int key, void *ptr, int size)
 {
 	cbz_document *doc = (cbz_document *)doc_;
 
-	doc = doc;
+	UNUSED(doc);
 
 	switch(key)
 	{

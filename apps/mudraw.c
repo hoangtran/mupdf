@@ -30,6 +30,8 @@ static int invert = 0;
 static int width = 0;
 static int height = 0;
 static int fit = 0;
+static int errored = 0;
+static int ignore_errors = 0;
 
 static fz_text_sheet *sheet = NULL;
 static fz_colorspace *colorspace;
@@ -67,6 +69,7 @@ static void usage(void)
 		"\t-G gamma\tgamma correct output\n"
 		"\t-I\tinvert output\n"
 		"\t-l\tprint outline\n"
+		"\t-i\tignore errors and continue with the next file\n"
 		"\tpages\tcomma separated list of ranges\n");
 	exit(1);
 }
@@ -102,6 +105,7 @@ static void drawpage(fz_context *ctx, fz_document *doc, int pagenum)
 	fz_display_list *list = NULL;
 	fz_device *dev = NULL;
 	int start;
+	fz_cookie cookie = { 0 };
 
 	fz_var(list);
 	fz_var(dev);
@@ -126,17 +130,19 @@ static void drawpage(fz_context *ctx, fz_document *doc, int pagenum)
 		{
 			list = fz_new_display_list(ctx);
 			dev = fz_new_list_device(ctx, list);
-			fz_run_page(doc, page, dev, fz_identity, NULL);
+			fz_run_page(doc, page, dev, fz_identity, &cookie);
+		}
+		fz_always(ctx)
+		{
+			fz_free_device(dev);
+			dev = NULL;
 		}
 		fz_catch(ctx)
 		{
-			fz_free_device(dev);
 			fz_free_display_list(ctx, list);
 			fz_free_page(doc, page);
 			fz_throw(ctx, "cannot draw page %d in file '%s'", pagenum, filename);
 		}
-		fz_free_device(dev);
-		dev = NULL;
 	}
 
 	if (showxml)
@@ -146,20 +152,22 @@ static void drawpage(fz_context *ctx, fz_document *doc, int pagenum)
 			dev = fz_new_trace_device(ctx);
 			printf("<page number=\"%d\">\n", pagenum);
 			if (list)
-				fz_run_display_list(list, dev, fz_identity, fz_infinite_bbox, NULL);
+				fz_run_display_list(list, dev, fz_identity, fz_infinite_bbox, &cookie);
 			else
-				fz_run_page(doc, page, dev, fz_identity, NULL);
+				fz_run_page(doc, page, dev, fz_identity, &cookie);
 			printf("</page>\n");
+		}
+		fz_always(ctx)
+		{
+			fz_free_device(dev);
+			dev = NULL;
 		}
 		fz_catch(ctx)
 		{
-			fz_free_device(dev);
 			fz_free_display_list(ctx, list);
 			fz_free_page(doc, page);
 			fz_rethrow(ctx);
 		}
-		fz_free_device(dev);
-		dev = NULL;
 	}
 
 	if (showtext)
@@ -173,9 +181,9 @@ static void drawpage(fz_context *ctx, fz_document *doc, int pagenum)
 			text = fz_new_text_page(ctx, fz_bound_page(doc, page));
 			dev = fz_new_text_device(ctx, sheet, text);
 			if (list)
-				fz_run_display_list(list, dev, fz_identity, fz_infinite_bbox, NULL);
+				fz_run_display_list(list, dev, fz_identity, fz_infinite_bbox, &cookie);
 			else
-				fz_run_page(doc, page, dev, fz_identity, NULL);
+				fz_run_page(doc, page, dev, fz_identity, &cookie);
 			fz_free_device(dev);
 			dev = NULL;
 			if (showtext == TEXT_XML)
@@ -192,15 +200,18 @@ static void drawpage(fz_context *ctx, fz_document *doc, int pagenum)
 				printf("\f\n");
 			}
 		}
-		fz_catch(ctx)
+		fz_always(ctx)
 		{
 			fz_free_device(dev);
+			dev = NULL;
 			fz_free_text_page(ctx, text);
+		}
+		fz_catch(ctx)
+		{
 			fz_free_display_list(ctx, list);
 			fz_free_page(doc, page);
 			fz_rethrow(ctx);
 		}
-		fz_free_text_page(ctx, text);
 	}
 
 	if (showmd5 || showtime)
@@ -283,9 +294,9 @@ static void drawpage(fz_context *ctx, fz_document *doc, int pagenum)
 
 			dev = fz_new_draw_device(ctx, pix);
 			if (list)
-				fz_run_display_list(list, dev, ctm, bbox, NULL);
+				fz_run_display_list(list, dev, ctm, bbox, &cookie);
 			else
-				fz_run_page(doc, page, dev, ctm, NULL);
+				fz_run_page(doc, page, dev, ctm, &cookie);
 			fz_free_device(dev);
 			dev = NULL;
 
@@ -324,13 +335,15 @@ static void drawpage(fz_context *ctx, fz_document *doc, int pagenum)
 				for (i = 0; i < 16; i++)
 					printf("%02x", digest[i]);
 			}
-
+		}
+		fz_always(ctx)
+		{
+			fz_free_device(dev);
+			dev = NULL;
 			fz_drop_pixmap(ctx, pix);
 		}
 		fz_catch(ctx)
 		{
-			fz_free_device(dev);
-			fz_drop_pixmap(ctx, pix);
 			fz_free_display_list(ctx, list);
 			fz_free_page(doc, page);
 			fz_rethrow(ctx);
@@ -356,6 +369,7 @@ static void drawpage(fz_context *ctx, fz_document *doc, int pagenum)
 		if (diff > timing.max)
 		{
 			timing.max = diff;
+			timing.maxpage = pagenum;
 			timing.maxfilename = filename;
 		}
 		timing.total += diff;
@@ -368,6 +382,9 @@ static void drawpage(fz_context *ctx, fz_document *doc, int pagenum)
 		printf("\n");
 
 	fz_flush_warnings(ctx);
+
+	if (cookie.errors)
+		errored = 1;
 }
 
 static void drawrange(fz_context *ctx, fz_document *doc, char *range)
@@ -394,8 +411,8 @@ static void drawrange(fz_context *ctx, fz_document *doc, char *range)
 				epage = pagecount;
 		}
 
-		spage = CLAMP(spage, 1, pagecount);
-		epage = CLAMP(epage, 1, pagecount);
+		spage = fz_clampi(spage, 1, pagecount);
+		epage = fz_clampi(epage, 1, pagecount);
 
 		if (spage < epage)
 			for (page = spage; page <= epage; page++)
@@ -432,7 +449,7 @@ int main(int argc, char **argv)
 
 	fz_var(doc);
 
-	while ((c = fz_getopt(argc, argv, "lo:p:r:R:ab:dgmtx5G:Iw:h:f")) != -1)
+	while ((c = fz_getopt(argc, argv, "lo:p:r:R:ab:dgmtx5G:Iw:h:fi")) != -1)
 	{
 		switch (c)
 		{
@@ -454,6 +471,7 @@ int main(int argc, char **argv)
 		case 'h': height = atof(fz_optarg); break;
 		case 'f': fit = 1; break;
 		case 'I': invert++; break;
+		case 'i': ignore_errors = 1; break;
 		default: usage(); break;
 		}
 	}
@@ -516,47 +534,60 @@ int main(int argc, char **argv)
 	{
 		while (fz_optind < argc)
 		{
-			filename = argv[fz_optind++];
-			files++;
-
 			fz_try(ctx)
 			{
-				doc = fz_open_document(ctx, filename);
+				filename = argv[fz_optind++];
+				files++;
+
+				fz_try(ctx)
+				{
+					doc = fz_open_document(ctx, filename);
+				}
+				fz_catch(ctx)
+				{
+					fz_throw(ctx, "cannot open document: %s", filename);
+				}
+
+				if (fz_needs_password(doc))
+					if (!fz_authenticate_password(doc, password))
+						fz_throw(ctx, "cannot authenticate password: %s", filename);
+
+				if (showxml || showtext == TEXT_XML)
+					printf("<document name=\"%s\">\n", filename);
+
+				if (showoutline)
+					drawoutline(ctx, doc);
+
+				if (showtext || showxml || showtime || showmd5 || output)
+				{
+					if (fz_optind == argc || !isrange(argv[fz_optind]))
+						drawrange(ctx, doc, "1-");
+					if (fz_optind < argc && isrange(argv[fz_optind]))
+						drawrange(ctx, doc, argv[fz_optind++]);
+				}
+
+				if (showxml || showtext == TEXT_XML)
+					printf("</document>\n");
+
+				fz_close_document(doc);
+				doc = NULL;
 			}
 			fz_catch(ctx)
 			{
-				fz_throw(ctx, "cannot open document: %s", filename);
+				if (!ignore_errors)
+					fz_rethrow(ctx);
+
+				fz_close_document(doc);
+				doc = NULL;
+				fz_warn(ctx, "ignoring error in '%s'", filename);
 			}
-
-			if (fz_needs_password(doc))
-				if (!fz_authenticate_password(doc, password))
-					fz_throw(ctx, "cannot authenticate password: %s", filename);
-
-			if (showxml || showtext == TEXT_XML)
-				printf("<document name=\"%s\">\n", filename);
-
-			if (showoutline)
-				drawoutline(ctx, doc);
-
-			if (showtext || showxml || showtime || showmd5 || output)
-			{
-				if (fz_optind == argc || !isrange(argv[fz_optind]))
-					drawrange(ctx, doc, "1-");
-				if (fz_optind < argc && isrange(argv[fz_optind]))
-					drawrange(ctx, doc, argv[fz_optind++]);
-			}
-
-			if (showxml || showtext == TEXT_XML)
-				printf("</document>\n");
-
-			fz_close_document(doc);
-			doc = NULL;
 		}
 	}
 	fz_catch(ctx)
 	{
 		fz_close_document(doc);
 		fprintf(stderr, "error: cannot draw '%s'\n", filename);
+		errored = 1;
 	}
 
 	if (showtext == TEXT_HTML)
@@ -589,5 +620,5 @@ int main(int argc, char **argv)
 	}
 
 	fz_free_context(ctx);
-	return 0;
+	return (errored != 0);
 }

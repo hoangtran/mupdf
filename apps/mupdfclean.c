@@ -24,6 +24,7 @@ static void usage(void)
 		"\t-gg\tin addition to -g compact xref table\n"
 		"\t-ggg\tin addition to -gg merge duplicate objects\n"
 		"\t-d\tdecompress all streams\n"
+		"\t-l\tlinearize PDF\n"
 		"\t-i\ttoggle decompression of image streams\n"
 		"\t-f\ttoggle decompression of font streams\n"
 		"\t-a\tascii hex encode binary streams\n"
@@ -86,8 +87,8 @@ static void retainpages(int argc, char **argv)
 			if (spage > epage)
 				page = spage, spage = epage, epage = page;
 
-			spage = CLAMP(spage, 1, pagecount);
-			epage = CLAMP(epage, 1, pagecount);
+			spage = fz_clampi(spage, 1, pagecount);
+			epage = fz_clampi(epage, 1, pagecount);
 
 			for (page = spage; page <= epage; page++)
 			{
@@ -122,8 +123,9 @@ static void retainpages(int argc, char **argv)
 		pdf_obj *names = pdf_new_dict(ctx, 1);
 		pdf_obj *dests = pdf_new_dict(ctx, 1);
 		pdf_obj *names_list = pdf_new_array(ctx, 32);
+		int len = pdf_dict_len(olddests);
 
-		for (i = 0; i < pdf_dict_len(olddests); i++)
+		for (i = 0; i < len; i++)
 		{
 			pdf_obj *key = pdf_dict_get_key(olddests, i);
 			pdf_obj *val = pdf_dict_get_val(olddests, i);
@@ -159,21 +161,24 @@ int pdfclean_main(int argc, char **argv)
 	int c;
 	int subset;
 	fz_write_options opts;
+	int write_failed = 0;
 
-	opts.dogarbage = 0;
-	opts.doexpand = 0;
-	opts.doascii = 0;
+	opts.do_garbage = 0;
+	opts.do_expand = 0;
+	opts.do_ascii = 0;
+	opts.do_linear = 0;
 
-	while ((c = fz_getopt(argc, argv, "adfgip:")) != -1)
+	while ((c = fz_getopt(argc, argv, "adfgilp:")) != -1)
 	{
 		switch (c)
 		{
 		case 'p': password = fz_optarg; break;
-		case 'g': opts.dogarbage ++; break;
-		case 'd': opts.doexpand ^= fz_expand_all; break;
-		case 'f': opts.doexpand ^= fz_expand_fonts; break;
-		case 'i': opts.doexpand ^= fz_expand_images; break;
-		case 'a': opts.doascii ++; break;
+		case 'g': opts.do_garbage ++; break;
+		case 'd': opts.do_expand ^= fz_expand_all; break;
+		case 'f': opts.do_expand ^= fz_expand_fonts; break;
+		case 'i': opts.do_expand ^= fz_expand_images; break;
+		case 'l': opts.do_linear ++; break;
+		case 'a': opts.do_ascii ++; break;
 		default: usage(); break;
 		}
 	}
@@ -200,18 +205,29 @@ int pdfclean_main(int argc, char **argv)
 		exit(1);
 	}
 
-	xref = pdf_open_document_no_run(ctx, infile);
-	if (pdf_needs_password(xref))
-		if (!pdf_authenticate_password(xref, password))
-			fz_throw(ctx, "cannot authenticate password: %s", infile);
+	fz_try(ctx)
+	{
+		xref = pdf_open_document_no_run(ctx, infile);
+		if (pdf_needs_password(xref))
+			if (!pdf_authenticate_password(xref, password))
+				fz_throw(ctx, "cannot authenticate password: %s", infile);
 
-	/* Only retain the specified subset of the pages */
-	if (subset)
-		retainpages(argc, argv);
+		/* Only retain the specified subset of the pages */
+		if (subset)
+			retainpages(argc, argv);
 
-	pdf_write_document(xref, outfile, &opts);
+		pdf_write_document(xref, outfile, &opts);
+	}
+	fz_always(ctx)
+	{
+		pdf_close_document(xref);
+	}
+	fz_catch(ctx)
+	{
+		write_failed = 1;
+	}
 
-	pdf_close_document(xref);
 	fz_free_context(ctx);
-	return 0;
+
+	return write_failed ? 1 : 0;
 }

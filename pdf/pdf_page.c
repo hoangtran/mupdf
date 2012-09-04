@@ -19,12 +19,14 @@ put_marker_bool(fz_context *ctx, pdf_obj *rdb, char *marker, int val)
 	{
 		pdf_dict_puts(rdb, marker, tmp);
 	}
-	fz_catch(ctx)
+	fz_always(ctx)
 	{
 		pdf_drop_obj(tmp);
+	}
+	fz_catch(ctx)
+	{
 		fz_rethrow(ctx);
 	}
-	pdf_drop_obj(tmp);
 }
 
 typedef struct pdf_page_load_s pdf_page_load;
@@ -152,7 +154,7 @@ pdf_load_page_tree(pdf_document *xref)
 	pdf_obj *count;
 	struct info info;
 
-	if (xref->page_len)
+	if (xref->page_refs)
 		return;
 
 	catalog = pdf_dict_gets(xref->trailer, "Root");
@@ -161,7 +163,7 @@ pdf_load_page_tree(pdf_document *xref)
 
 	if (!pdf_is_dict(pages))
 		fz_throw(ctx, "missing page tree");
-	if (!pdf_is_int(count))
+	if (!pdf_is_int(count) || pdf_to_int(count) < 0)
 		fz_throw(ctx, "missing page count");
 
 	xref->page_cap = pdf_to_int(count);
@@ -270,12 +272,14 @@ found:
 			useBM = 1;
 		}
 	}
-	fz_catch(ctx)
+	fz_always(ctx)
 	{
 		pdf_dict_unmark(rdb);
+	}
+	fz_catch(ctx)
+	{
 		fz_rethrow(ctx);
 	}
-	pdf_dict_unmark(rdb);
 
 	put_marker_bool(ctx, rdb, ".useBM", useBM);
 	return useBM;
@@ -290,6 +294,7 @@ pdf_load_page(pdf_document *xref, int number)
 	pdf_obj *pageobj, *pageref, *obj;
 	fz_rect mediabox, cropbox, realbox;
 	fz_matrix ctm;
+	float userunit;
 
 	pdf_load_page_tree(xref);
 	if (number < 0 || number >= xref->page_len)
@@ -305,6 +310,12 @@ pdf_load_page(pdf_document *xref, int number)
 	page->links = NULL;
 	page->annots = NULL;
 
+	obj = pdf_dict_gets(pageobj, "UserUnit");
+	if (pdf_is_real(obj))
+		userunit = pdf_to_real(obj);
+	else
+		userunit = 1;
+
 	mediabox = pdf_to_rect(ctx, pdf_dict_gets(pageobj, "MediaBox"));
 	if (fz_is_empty_rect(mediabox))
 	{
@@ -319,10 +330,10 @@ pdf_load_page(pdf_document *xref, int number)
 	if (!fz_is_empty_rect(cropbox))
 		mediabox = fz_intersect_rect(mediabox, cropbox);
 
-	page->mediabox.x0 = MIN(mediabox.x0, mediabox.x1);
-	page->mediabox.y0 = MIN(mediabox.y0, mediabox.y1);
-	page->mediabox.x1 = MAX(mediabox.x0, mediabox.x1);
-	page->mediabox.y1 = MAX(mediabox.y0, mediabox.y1);
+	page->mediabox.x0 = fz_min(mediabox.x0, mediabox.x1) * userunit;
+	page->mediabox.y0 = fz_min(mediabox.y0, mediabox.y1) * userunit;
+	page->mediabox.x1 = fz_max(mediabox.x0, mediabox.x1) * userunit;
+	page->mediabox.y1 = fz_max(mediabox.y0, mediabox.y1) * userunit;
 
 	if (page->mediabox.x1 - page->mediabox.x0 < 1 || page->mediabox.y1 - page->mediabox.y0 < 1)
 	{
@@ -342,7 +353,9 @@ pdf_load_page(pdf_document *xref, int number)
 
 	ctm = fz_concat(fz_rotate(-page->rotate), fz_scale(1, -1));
 	realbox = fz_transform_rect(ctm, page->mediabox);
-	page->ctm = fz_concat(ctm, fz_translate(-realbox.x0, -realbox.y0));
+	ctm = fz_concat(ctm, fz_scale(userunit, userunit));
+	ctm = fz_concat(ctm, fz_translate(-realbox.x0, -realbox.y0));
+	page->ctm = ctm;
 
 	obj = pdf_dict_gets(pageobj, "Annots");
 	if (obj)
@@ -395,10 +408,8 @@ pdf_load_links(pdf_document *xref, pdf_page *page)
 void
 pdf_free_page(pdf_document *xref, pdf_page *page)
 {
-	if (page->resources)
-		pdf_drop_obj(page->resources);
-	if (page->contents)
-		pdf_drop_obj(page->contents);
+	pdf_drop_obj(page->resources);
+	pdf_drop_obj(page->contents);
 	if (page->links)
 		fz_drop_link(xref->ctx, page->links);
 	if (page->annots)

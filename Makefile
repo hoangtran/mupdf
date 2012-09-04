@@ -94,7 +94,7 @@ $(FITZ_LIB_SO) : $(FITZ_OBJECT_FILES)
 
 $(FITZ_LIB_SO) :
 	$(SO_CMD)
-	@cd $(OUT) && ln -s `basename $@` libfitz.so
+	@cd $(OUT) && ln -sf `basename $@` libfitz.so
 
 # --- Generated CMAP and FONT files ---
 
@@ -184,7 +184,11 @@ install: $(FITZ_LIB_A) $(FITZ_LIB_SO) $(MUVIEW) $(MUDRAW) $(MUBUSY)
 
 # --- Clean and Default ---
 
-all: $(THIRD_LIBS) $(FITZ_LIB_A) $(FITZ_LIB_SO) $(MUVIEW) $(MUDRAW) $(MUBUSY)
+all: all-nojs
+
+all-nojs: $(THIRD_LIBS) $(FITZ_LIB_A) $(FITZ_LIB_SO) $(MUVIEW) $(MUDRAW) $(MUBUSY)
+
+third: $(THIRD_LIBS)
 
 clean:
 	rm -rf $(OUT)

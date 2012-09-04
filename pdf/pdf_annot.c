@@ -198,6 +198,8 @@ pdf_parse_action(pdf_document *xref, pdf_obj *action)
 	pdf_obj *obj, *dest;
 	fz_context *ctx = xref->ctx;
 
+	UNUSED(ctx);
+
 	ld.kind = FZ_LINK_NONE;
 
 	if (!action)
@@ -320,8 +322,7 @@ pdf_free_annot(fz_context *ctx, pdf_annot *annot)
 		next = annot->next;
 		if (annot->ap)
 			pdf_drop_xobject(ctx, annot->ap);
-		if (annot->obj)
-			pdf_drop_obj(annot->obj);
+		pdf_drop_obj(annot->obj);
 		fz_free(ctx, annot);
 		annot = next;
 	}
@@ -399,15 +400,12 @@ pdf_load_annots(pdf_document *xref, pdf_obj *annots)
 
 				pdf_transform_annot(annot);
 
-				if (annot)
+				if (!head)
+					head = tail = annot;
+				else
 				{
-					if (!head)
-						head = tail = annot;
-					else
-					{
-						tail->next = annot;
-						tail = annot;
-					}
+					tail->next = annot;
+					tail = annot;
 				}
 			}
 		}

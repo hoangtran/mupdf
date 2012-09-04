@@ -24,7 +24,7 @@ static void showtrailer(void)
 	if (!doc)
 		fz_throw(ctx, "no file specified");
 	printf("trailer\n");
-	pdf_print_obj(doc->trailer);
+	pdf_fprint_obj(stdout, doc->trailer, 0);
 	printf("\n");
 }
 
@@ -122,7 +122,7 @@ static void showobject(int num, int gen)
 		else
 		{
 			printf("%d %d obj\n", num, gen);
-			pdf_print_obj(obj);
+			pdf_fprint_obj(stdout, obj, 0);
 			printf("stream\n");
 			showstream(num, gen);
 			printf("endstream\n");
@@ -132,7 +132,7 @@ static void showobject(int num, int gen)
 	else
 	{
 		printf("%d %d obj\n", num, gen);
-		pdf_print_obj(obj);
+		pdf_fprint_obj(stdout, obj, 0);
 		printf("endobj\n\n");
 	}
 
@@ -142,9 +142,10 @@ static void showobject(int num, int gen)
 static void showgrep(char *filename)
 {
 	pdf_obj *obj;
-	int i;
+	int i, len;
 
-	for (i = 0; i < pdf_count_objects(doc); i++)
+	len = pdf_count_objects(doc);
+	for (i = 0; i < len; i++)
 	{
 		if (doc->table[i].type == 'n' || doc->table[i].type == 'o')
 		{

@@ -3,12 +3,27 @@
 
 #include "fitz.h"
 
+#ifdef _WIN32 /* Microsoft Visual C++ */
+
+typedef signed char int8_t;
+typedef short int int16_t;
+typedef int int32_t;
+typedef __int64 int64_t;
+
+typedef unsigned char uint8_t;
+typedef unsigned short int uint16_t;
+typedef unsigned int uint32_t;
+typedef unsigned __int64 uint64_t;
+
+#else
+#include <inttypes.h>
+#endif
+
 struct fz_warn_context_s
 {
 	char message[256];
 	int count;
 };
-
 
 fz_context *fz_clone_context_internal(fz_context *ctx);
 
@@ -71,7 +86,6 @@ float fz_atof(const char *s);
 typedef struct fz_hash_table_s fz_hash_table;
 
 fz_hash_table *fz_new_hash_table(fz_context *ctx, int initialsize, int keylen, int lock);
-void fz_print_hash(fz_context *ctx, FILE *out, fz_hash_table *table);
 void fz_empty_hash(fz_context *ctx, fz_hash_table *table);
 void fz_free_hash(fz_context *ctx, fz_hash_table *table);
 
@@ -82,6 +96,10 @@ void fz_hash_remove(fz_context *ctx, fz_hash_table *table, void *key);
 int fz_hash_len(fz_context *ctx, fz_hash_table *table);
 void *fz_hash_get_key(fz_context *ctx, fz_hash_table *table, int idx);
 void *fz_hash_get_val(fz_context *ctx, fz_hash_table *table, int idx);
+
+#ifndef NDEBUG
+void fz_print_hash(fz_context *ctx, FILE *out, fz_hash_table *table);
+#endif
 
 /*
  * Math and geometry
@@ -152,6 +170,32 @@ struct fz_sha256_s
 void fz_sha256_init(fz_sha256 *state);
 void fz_sha256_update(fz_sha256 *state, const unsigned char *input, unsigned int inlen);
 void fz_sha256_final(fz_sha256 *state, unsigned char digest[32]);
+
+/* sha-512 digests */
+
+typedef struct fz_sha512_s fz_sha512;
+
+struct fz_sha512_s
+{
+	uint64_t state[8];
+	unsigned int count[2];
+	union {
+		unsigned char u8[128];
+		uint64_t u64[16];
+	} buffer;
+};
+
+void fz_sha512_init(fz_sha512 *state);
+void fz_sha512_update(fz_sha512 *state, const unsigned char *input, unsigned int inlen);
+void fz_sha512_final(fz_sha512 *state, unsigned char digest[32]);
+
+/* sha-384 digests */
+
+typedef struct fz_sha512_s fz_sha384;
+
+void fz_sha384_init(fz_sha384 *state);
+void fz_sha384_update(fz_sha384 *state, const unsigned char *input, unsigned int inlen);
+void fz_sha384_final(fz_sha384 *state, unsigned char digest[32]);
 
 /* arc4 crypto */
 
@@ -270,7 +314,9 @@ struct fz_store_type_s
 	void *(*keep_key)(fz_context *,void *);
 	void (*drop_key)(fz_context *,void *);
 	int (*cmp_key)(void *, void *);
+#ifndef NDEBUG
 	void (*debug)(void *);
+#endif
 };
 
 /*
@@ -290,11 +336,6 @@ void fz_drop_store_context(fz_context *ctx);
 	fz_keep_store_context: Take a reference to the store.
 */
 fz_store *fz_keep_store_context(fz_context *ctx);
-
-/*
-	fz_print_store: Dump the contents of the store for debugging.
-*/
-void fz_print_store(fz_context *ctx, FILE *out);
 
 /*
 	fz_store_item: Add an item to the store.
@@ -364,11 +405,19 @@ void fz_empty_store(fz_context *ctx);
 */
 int fz_store_scavenge(fz_context *ctx, unsigned int size, int *phase);
 
+/*
+	fz_print_store: Dump the contents of the store for debugging.
+*/
+#ifndef NDEBUG
+void fz_print_store(fz_context *ctx, FILE *out);
+#endif
+
 struct fz_buffer_s
 {
 	int refs;
 	unsigned char *data;
 	int cap, len;
+	int unused_bits;
 };
 
 /*
@@ -409,6 +458,21 @@ void fz_grow_buffer(fz_context *ctx, fz_buffer *buf);
 	buf: The buffer to trim.
 */
 void fz_trim_buffer(fz_context *ctx, fz_buffer *buf);
+
+void fz_write_buffer(fz_context *ctx, fz_buffer *buf, unsigned char *data, int len);
+
+void fz_write_buffer_byte(fz_context *ctx, fz_buffer *buf, int val);
+
+void fz_write_buffer_bits(fz_context *ctx, fz_buffer *buf, int val, int bits);
+
+void fz_write_buffer_pad(fz_context *ctx, fz_buffer *buf);
+
+/*
+	fz_buffer_printf: print formatted to a buffer. The buffer will
+	grow, but the caller must ensure that no more than 256 bytes are
+	added to the buffer per call.
+*/
+void fz_buffer_printf(fz_context *ctx, fz_buffer *buffer, char *fmt, ...);
 
 struct fz_stream_s
 {
@@ -709,17 +773,19 @@ void fz_drop_font_context(fz_context *ctx);
 
 fz_font *fz_new_type3_font(fz_context *ctx, char *name, fz_matrix matrix);
 
-fz_font *fz_new_font_from_memory(fz_context *ctx, unsigned char *data, int len, int index, int use_glyph_bbox);
-fz_font *fz_new_font_from_file(fz_context *ctx, char *path, int index, int use_glyph_bbox);
+fz_font *fz_new_font_from_memory(fz_context *ctx, char *name, unsigned char *data, int len, int index, int use_glyph_bbox);
+fz_font *fz_new_font_from_file(fz_context *ctx, char *name, char *path, int index, int use_glyph_bbox);
 
 fz_font *fz_keep_font(fz_context *ctx, fz_font *font);
 void fz_drop_font(fz_context *ctx, fz_font *font);
 
-void fz_print_font(fz_context *ctx, FILE *out, fz_font *font);
-
 void fz_set_font_bbox(fz_context *ctx, fz_font *font, float xmin, float ymin, float xmax, float ymax);
 fz_rect fz_bound_glyph(fz_context *ctx, fz_font *font, int gid, fz_matrix trm);
 int fz_glyph_cacheable(fz_context *ctx, fz_font *font, int gid);
+
+#ifndef NDEBUG
+void fz_print_font(fz_context *ctx, FILE *out, fz_font *font);
+#endif
 
 /*
  * Vector path buffer.
@@ -785,6 +851,7 @@ struct fz_stroke_state_s
 };
 
 fz_path *fz_new_path(fz_context *ctx);
+fz_point fz_currentpoint(fz_context *ctx, fz_path *path);
 void fz_moveto(fz_context*, fz_path*, float x, float y);
 void fz_lineto(fz_context*, fz_path*, float x, float y);
 void fz_curveto(fz_context*,fz_path*, float, float, float, float, float, float);
@@ -798,7 +865,7 @@ void fz_transform_path(fz_context *ctx, fz_path *path, fz_matrix transform);
 fz_path *fz_clone_path(fz_context *ctx, fz_path *old);
 
 fz_rect fz_bound_path(fz_context *ctx, fz_path *path, fz_stroke_state *stroke, fz_matrix ctm);
-void fz_print_path(fz_context *ctx, FILE *out, fz_path *, int indent);
+void fz_adjust_rect_for_stroke(fz_rect *r, fz_stroke_state *stroke, fz_matrix *ctm);
 
 fz_stroke_state *fz_new_stroke_state(fz_context *ctx);
 fz_stroke_state *fz_new_stroke_state_with_len(fz_context *ctx, int len);
@@ -806,6 +873,10 @@ fz_stroke_state *fz_keep_stroke_state(fz_context *ctx, fz_stroke_state *stroke);
 void fz_drop_stroke_state(fz_context *ctx, fz_stroke_state *stroke);
 fz_stroke_state *fz_unshare_stroke_state(fz_context *ctx, fz_stroke_state *shared);
 fz_stroke_state *fz_unshare_stroke_state_with_len(fz_context *ctx, fz_stroke_state *shared, int len);
+
+#ifndef NDEBUG
+void fz_print_path(fz_context *ctx, FILE *out, fz_path *, int indent);
+#endif
 
 /*
  * Glyph cache
@@ -816,11 +887,13 @@ fz_glyph_cache *fz_keep_glyph_cache(fz_context *ctx);
 void fz_drop_glyph_cache_context(fz_context *ctx);
 void fz_purge_glyph_cache(fz_context *ctx);
 
+fz_path *fz_outline_ft_glyph(fz_context *ctx, fz_font *font, int gid, fz_matrix trm);
+fz_path *fz_outline_glyph(fz_context *ctx, fz_font *font, int gid, fz_matrix ctm);
 fz_pixmap *fz_render_ft_glyph(fz_context *ctx, fz_font *font, int cid, fz_matrix trm, int aa);
-fz_pixmap *fz_render_t3_glyph(fz_context *ctx, fz_font *font, int cid, fz_matrix trm, fz_colorspace *model);
+fz_pixmap *fz_render_t3_glyph(fz_context *ctx, fz_font *font, int cid, fz_matrix trm, fz_colorspace *model, fz_bbox scissor);
 fz_pixmap *fz_render_ft_stroked_glyph(fz_context *ctx, fz_font *font, int gid, fz_matrix trm, fz_matrix ctm, fz_stroke_state *state);
-fz_pixmap *fz_render_glyph(fz_context *ctx, fz_font*, int, fz_matrix, fz_colorspace *model);
-fz_pixmap *fz_render_stroked_glyph(fz_context *ctx, fz_font*, int, fz_matrix, fz_matrix, fz_stroke_state *stroke);
+fz_pixmap *fz_render_glyph(fz_context *ctx, fz_font*, int, fz_matrix, fz_colorspace *model, fz_bbox scissor);
+fz_pixmap *fz_render_stroked_glyph(fz_context *ctx, fz_font*, int, fz_matrix, fz_matrix, fz_stroke_state *stroke, fz_bbox scissor);
 void fz_render_t3_glyph_direct(fz_context *ctx, fz_device *dev, fz_font *font, int gid, fz_matrix trm, void *gstate);
 
 /*
@@ -899,10 +972,13 @@ struct fz_shade_s
 fz_shade *fz_keep_shade(fz_context *ctx, fz_shade *shade);
 void fz_drop_shade(fz_context *ctx, fz_shade *shade);
 void fz_free_shade_imp(fz_context *ctx, fz_storable *shade);
-void fz_print_shade(fz_context *ctx, FILE *out, fz_shade *shade);
 
 fz_rect fz_bound_shade(fz_context *ctx, fz_shade *shade, fz_matrix ctm);
 void fz_paint_shade(fz_context *ctx, fz_shade *shade, fz_matrix ctm, fz_pixmap *dest, fz_bbox bbox);
+
+#ifndef NDEBUG
+void fz_print_shade(fz_context *ctx, FILE *out, fz_shade *shade);
+#endif
 
 /*
  * Scan converter

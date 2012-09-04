@@ -36,7 +36,7 @@ pdf_read_start_xref(pdf_document *xref)
 
 	xref->file_size = fz_tell(xref->file);
 
-	t = MAX(0, xref->file_size - (int)sizeof buf);
+	t = fz_maxi(0, xref->file_size - (int)sizeof buf);
 	fz_seek(xref->file, t, 0);
 
 	n = fz_read(xref->file, buf, sizeof buf);
@@ -179,6 +179,14 @@ pdf_resize_xref(pdf_document *xref, int newlen)
 	xref->len = newlen;
 }
 
+pdf_obj *
+pdf_new_ref(pdf_document *xref, pdf_obj *obj)
+{
+	int num = pdf_create_object(xref);
+	pdf_update_object(xref, num, obj);
+	return pdf_new_indirect(xref->ctx, num, 0, xref);
+}
+
 static pdf_obj *
 pdf_read_old_xref(pdf_document *xref, pdf_lexbuf *buf)
 {
@@ -265,7 +273,9 @@ pdf_read_new_xref_section(pdf_document *xref, fz_stream *stm, int i0, int i1, in
 {
 	int i, n;
 
-	if (i0 < 0 || i0 + i1 > xref->len)
+	if (i0 < 0 || i1 < 0)
+		fz_throw(xref->ctx, "negative xref stream entry index");
+	if (i0 + i1 > xref->len)
 		fz_throw(xref->ctx, "xref stream has too many entries");
 
 	for (i = i0; i < i0 + i1; i++)
@@ -339,15 +349,24 @@ pdf_read_new_xref(pdf_document *xref, pdf_lexbuf *buf)
 		w1 = pdf_to_int(pdf_array_get(obj, 1));
 		w2 = pdf_to_int(pdf_array_get(obj, 2));
 
+		if (w0 < 0)
+			fz_warn(ctx, "xref stream objects have corrupt type");
+		if (w1 < 0)
+			fz_warn(ctx, "xref stream objects have corrupt offset");
+		if (w2 < 0)
+			fz_warn(ctx, "xref stream objects have corrupt generation");
+
+		w0 = w0 < 0 ? 0 : w0;
+		w1 = w1 < 0 ? 0 : w1;
+		w2 = w2 < 0 ? 0 : w2;
+
 		index = pdf_dict_gets(trailer, "Index");
 
 		stm = pdf_open_stream_with_offset(xref, num, gen, trailer, stm_ofs);
-		/* RJW: Ensure pdf_open_stream does fz_throw(ctx, "cannot open compressed xref stream (%d %d R)", num, gen); */
 
 		if (!index)
 		{
 			pdf_read_new_xref_section(xref, stm, 0, size, w0, w1, w2);
-			/* RJW: Ensure above does fz_throw(ctx, "cannot read xref stream (%d %d R)", num, gen); */
 		}
 		else
 		{
@@ -367,7 +386,6 @@ pdf_read_new_xref(pdf_document *xref, pdf_lexbuf *buf)
 	fz_catch(ctx)
 	{
 		pdf_drop_obj(trailer);
-		pdf_drop_obj(index);
 		fz_rethrow(ctx);
 	}
 
@@ -426,12 +444,17 @@ pdf_read_xref_sections(pdf_document *xref, int ofs, pdf_lexbuf *buf)
 			xrefstmofs = pdf_to_int(pdf_dict_gets(trailer, "XRefStm"));
 			prevofs = pdf_to_int(pdf_dict_gets(trailer, "Prev"));
 
+			if (xrefstmofs < 0)
+				fz_throw(ctx, "negative xref stream offset");
+			if (prevofs < 0)
+				fz_throw(ctx, "negative xref stream offset for previous xref stream");
+
 			/* We only recurse if we have both xrefstm and prev.
 			 * Hopefully this happens infrequently. */
 			if (xrefstmofs && prevofs)
 				pdf_read_xref_sections(xref, xrefstmofs, buf);
 			if (prevofs)
- 				ofs = prevofs;
+				ofs = prevofs;
 			else if (xrefstmofs)
 				ofs = xrefstmofs;
 			pdf_drop_obj(trailer);
@@ -469,7 +492,8 @@ pdf_load_xref(pdf_document *xref, pdf_lexbuf *buf)
 	if (!size)
 		fz_throw(ctx, "trailer missing Size entry");
 
-	pdf_resize_xref(xref, size);
+	if (size > xref->len)
+		pdf_resize_xref(xref, size);
 
 	pdf_read_xref_sections(xref, xref->startxref, buf);
 
@@ -524,8 +548,7 @@ pdf_ocg_set_config(pdf_document *xref, int config)
 			fz_throw(xref->ctx, "Illegal OCG config");
 	}
 
-	if (desc->intent)
-		pdf_drop_obj(desc->intent);
+	pdf_drop_obj(desc->intent);
 	desc->intent = pdf_dict_gets(cobj, "Intent");
 	if (desc->intent)
 		pdf_keep_obj(desc->intent);
@@ -650,8 +673,7 @@ pdf_free_ocg(fz_context *ctx, pdf_ocg_descriptor *desc)
 	if (!desc)
 		return;
 
-	if (desc->intent)
-		pdf_drop_obj(desc->intent);
+	pdf_drop_obj(desc->intent);
 	fz_free(ctx, desc->ocgs);
 	fz_free(ctx, desc);
 }
@@ -796,6 +818,7 @@ pdf_close_document(pdf_document *xref)
 			{
 				pdf_drop_obj(xref->table[i].obj);
 				xref->table[i].obj = NULL;
+				fz_drop_buffer(ctx, xref->table[i].stm_buf);
 			}
 		}
 		fz_free(xref->ctx, xref->table);
@@ -817,14 +840,15 @@ pdf_close_document(pdf_document *xref)
 
 	if (xref->file)
 		fz_close(xref->file);
-	if (xref->trailer)
-		pdf_drop_obj(xref->trailer);
+	pdf_drop_obj(xref->trailer);
 	if (xref->crypt)
 		pdf_free_crypt(ctx, xref->crypt);
 
 	pdf_free_ocg(ctx, xref->ocg);
 
 	fz_empty_store(ctx);
+
+	pdf_lexbuf_fin(&xref->lexbuf.base);
 
 	fz_free(ctx, xref);
 }
@@ -876,6 +900,11 @@ pdf_load_obj_stm(pdf_document *xref, int num, int gen, pdf_lexbuf *buf)
 		count = pdf_to_int(pdf_dict_gets(objstm, "N"));
 		first = pdf_to_int(pdf_dict_gets(objstm, "First"));
 
+		if (count < 0)
+			fz_throw(ctx, "negative number of objects in object stream");
+		if (first < 0)
+			fz_throw(ctx, "first object in object stream resides outside stream");
+
 		numbuf = fz_calloc(ctx, count, sizeof(int));
 		ofsbuf = fz_calloc(ctx, count, sizeof(int));
 
@@ -900,7 +929,6 @@ pdf_load_obj_stm(pdf_document *xref, int num, int gen, pdf_lexbuf *buf)
 			fz_seek(stm, first + ofsbuf[i], 0);
 
 			obj = pdf_parse_stm_obj(xref, stm, buf);
-			/* RJW: Ensure above does fz_throw(ctx, "cannot parse object %d in stream (%d %d R)", i, num, gen); */
 
 			if (numbuf[i] < 1 || numbuf[i] >= xref->len)
 			{
@@ -1119,13 +1147,13 @@ pdf_update_object(pdf_document *xref, int num, pdf_obj *newobj)
 
 	x = &xref->table[num];
 
-	if (x->obj)
-		pdf_drop_obj(x->obj);
+	pdf_drop_obj(x->obj);
 
 	x->type = 'n';
 	x->ofs = 0;
 	x->obj = pdf_keep_obj(newobj);
 }
+
 void
 pdf_update_stream(pdf_document *xref, int num, fz_buffer *newbuf)
 {
@@ -1158,7 +1186,8 @@ pdf_meta(pdf_document *doc, int key, void *ptr, int size)
 		return FZ_META_OK;
 	case FZ_META_CRYPT_INFO:
 		if (doc->crypt)
-			sprintf((char *)ptr, "Standard V%d %d-bit %s",
+			sprintf((char *)ptr, "Standard V%d R%d %d-bit %s",
+				pdf_crypt_version(doc),
 				pdf_crypt_revision(doc),
 				pdf_crypt_length(doc),
 				pdf_crypt_method(doc));
@@ -1278,9 +1307,8 @@ static int pdf_meta_shim(fz_document *doc, int key, void *ptr, int size)
 }
 
 static pdf_document *
-pdf_new_document(fz_stream *file)
+pdf_new_document(fz_context *ctx, fz_stream *file)
 {
-	fz_context *ctx = file->ctx;
 	pdf_document *doc = fz_malloc_struct(ctx, pdf_document);
 
 	doc->super.close = pdf_close_document_shim;
@@ -1295,7 +1323,7 @@ pdf_new_document(fz_stream *file)
 	doc->super.free_page = pdf_free_page_shim;
 	doc->super.meta = pdf_meta_shim;
 
-	doc->lexbuf.base.size = PDF_LEXBUF_LARGE;
+	pdf_lexbuf_init(ctx, &doc->lexbuf.base, PDF_LEXBUF_LARGE);
 	doc->file = fz_keep_stream(file);
 	doc->ctx = ctx;
 
@@ -1303,9 +1331,9 @@ pdf_new_document(fz_stream *file)
 }
 
 pdf_document *
-pdf_open_document_no_run_with_stream(fz_stream *file)
+pdf_open_document_no_run_with_stream(fz_context *ctx, fz_stream *file)
 {
-	pdf_document *doc = pdf_new_document(file);
+	pdf_document *doc = pdf_new_document(ctx, file);
 	pdf_init_document(doc);
 	return doc;
 }
@@ -1321,7 +1349,7 @@ pdf_open_document_no_run(fz_context *ctx, const char *filename)
 	fz_try(ctx)
 	{
 		file = fz_open_file(ctx, filename);
-		doc = pdf_new_document(file);
+		doc = pdf_new_document(ctx, file);
 		pdf_init_document(doc);
 	}
 	fz_always(ctx)

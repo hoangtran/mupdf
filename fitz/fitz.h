@@ -22,18 +22,10 @@
 
 #include "memento.h"
 
-/*
-	Some versions of setjmp/longjmp (notably MacOSX and ios) store/restore
-	signal handlers too. We don't alter signal handlers within mupdf, so
-	there is no need for us to store/restore - hence we use the
-	non-restoring variants. This makes a large speed difference.
-*/
 #ifdef __APPLE__
-#define fz_setjmp _setjmp
-#define fz_longjmp _longjmp
-#else
-#define fz_setjmp setjmp
-#define fz_longjmp longjmp
+#define HAVE_SIGSETJMP
+#elif defined(__unix)
+#define HAVE_SIGSETJMP
 #endif
 
 #ifdef __ANDROID__
@@ -47,12 +39,6 @@
 #endif
 
 #define nelem(x) (sizeof(x)/sizeof((x)[0]))
-
-#define ABS(x) ( (x) < 0 ? -(x) : (x) )
-#define MIN(a,b) ( (a) < (b) ? (a) : (b) )
-#define MAX(a,b) ( (a) > (b) ? (a) : (b) )
-#define CLAMP(x,a,b) ( (x) > (b) ? (b) : ( (x) < (a) ? (a) : (x) ) )
-#define DIV_BY_ZERO(a, b, min, max) (((a) < 0) ^ ((b) < 0) ? (min) : (max))
 
 /*
 	Some differences in libc can be smoothed over
@@ -135,6 +121,68 @@ int gettimeofday(struct timeval *tv, struct timezone *tz);
 #endif
 
 /*
+	Shut the compiler up about unused variables
+*/
+#define UNUSED(x) do { x = x; } while (0)
+
+/*
+	Some standard math functions, done as static inlines for speed.
+	People with compilers that do not adequately implement inlines may
+	like to reimplement these using macros.
+*/
+static inline float fz_abs(float f)
+{
+	return (f < 0 ? -f : f);
+}
+
+static inline int fz_absi(int i)
+{
+	return (i < 0 ? -i : i);
+}
+
+static inline float fz_min(float a, float b)
+{
+	return (a < b ? a : b);
+}
+
+static inline int fz_mini(int a, int b)
+{
+	return (a < b ? a : b);
+}
+
+static inline float fz_max(float a, float b)
+{
+	return (a > b ? a : b);
+}
+
+static inline int fz_maxi(int a, int b)
+{
+	return (a > b ? a : b);
+}
+
+static inline float fz_clamp(float f, float min, float max)
+{
+	return (f > min ? (f < max ? f : max) : min);
+}
+
+static inline int fz_clampi(int i, float min, float max)
+{
+	return (i > min ? (i < max ? i : max) : min);
+}
+
+static inline double fz_clampd(double d, double min, double max)
+{
+	return (d > min ? (d < max ? d : max) : min);
+}
+
+static inline void *fz_clampp(void *p, void *min, void *max)
+{
+	return (p > min ? (p < max ? p : max) : min);
+}
+
+#define DIV_BY_ZERO(a, b, min, max) (((a) < 0) ^ ((b) < 0) ? (min) : (max))
+
+/*
 	Contexts
 */
 
@@ -156,12 +204,30 @@ struct fz_alloc_context_s
 	void (*free)(void *, void *);
 };
 
+/*
+	Where possible (i.e. on platforms on which they are provided), use
+	sigsetjmp/siglongjmp in preference to setjmp/longjmp. We don't alter
+	signal handlers within mupdf, so there is no need for us to
+	store/restore them - hence we use the non-restoring variants. This
+	makes a large speed difference on MacOSX (and probably other
+	platforms too.
+*/
+#ifdef HAVE_SIGSETJMP
+#define fz_setjmp(BUF) sigsetjmp(BUF, 0)
+#define fz_longjmp(BUF,VAL) siglongjmp(BUF, VAL)
+#define fz_jmp_buf sigjmp_buf
+#else
+#define fz_setjmp(BUF) setjmp(BUF)
+#define fz_longjmp(BUF,VAL) longjmp(BUF,VAL)
+#define fz_jmp_buf jmp_buf
+#endif
+
 struct fz_error_context_s
 {
 	int top;
 	struct {
 		int code;
-		jmp_buf buffer;
+		fz_jmp_buf buffer;
 	} stack[256];
 	char message[256];
 };
@@ -169,14 +235,15 @@ struct fz_error_context_s
 void fz_var_imp(void *);
 #define fz_var(var) fz_var_imp((void *)&(var))
 
+
 /*
 	Exception macro definitions. Just treat these as a black box - pay no
 	attention to the man behind the curtain.
 */
 
 #define fz_try(ctx) \
-	if (fz_push_try(ctx->error), \
-		(ctx->error->stack[ctx->error->top].code = fz_setjmp(ctx->error->stack[ctx->error->top].buffer)) == 0) \
+	if (fz_push_try(ctx->error) && \
+		((ctx->error->stack[ctx->error->top].code = fz_setjmp(ctx->error->stack[ctx->error->top].buffer)) == 0))\
 	{ do {
 
 #define fz_always(ctx) \
@@ -189,7 +256,7 @@ void fz_var_imp(void *);
 	} \
 	if (ctx->error->stack[ctx->error->top--].code)
 
-void fz_push_try(fz_error_context *ex);
+int fz_push_try(fz_error_context *ex);
 void fz_throw(fz_context *, char *, ...) __printflike(2, 3);
 void fz_rethrow(fz_context *);
 void fz_warn(fz_context *ctx, char *fmt, ...) __printflike(2, 3);
@@ -392,7 +459,7 @@ void *fz_calloc(fz_context *ctx, unsigned int count, unsigned int size);
 	exception on failure to allocate.
 */
 #define fz_malloc_struct(CTX, STRUCT) \
-	Memento_label(fz_calloc(CTX,1,sizeof(STRUCT)), #STRUCT)
+	((STRUCT *)Memento_label(fz_calloc(CTX,1,sizeof(STRUCT)), #STRUCT))
 
 /*
 	fz_malloc_array: Allocate a block of (non zeroed) memory (with
@@ -1569,7 +1636,7 @@ typedef struct fz_text_page_s fz_text_page;
 /*
 	fz_text_sheet: A text sheet contains a list of distinct text styles
 	used on a page (or a series of pages).
-*/ 
+*/
 struct fz_text_sheet_s
 {
 	int maxid;
@@ -1579,7 +1646,7 @@ struct fz_text_sheet_s
 /*
 	fz_text_style: A text style contains details of a distinct text style
 	used on a page.
-*/ 
+*/
 struct fz_text_style_s
 {
 	fz_text_style *next;
@@ -1594,7 +1661,7 @@ struct fz_text_style_s
 /*
 	fz_text_page: A text page is a list of blocks of text, together with
 	an overall bounding box.
-*/ 
+*/
 struct fz_text_page_s
 {
 	fz_rect mediabox;
@@ -1606,7 +1673,7 @@ struct fz_text_page_s
 	fz_text_block: A text block is a list of lines of text. In typical
 	cases this may correspond to a paragraph or a column of text. A
 	collection of blocks makes up a page.
-*/ 
+*/
 struct fz_text_block_s
 {
 	fz_rect bbox;
@@ -1619,7 +1686,7 @@ struct fz_text_block_s
 	(or very similar) baseline. In typical cases this should correspond
 	(as expected) to complete lines of text. A collection of lines makes
 	up a block.
-*/ 
+*/
 struct fz_text_line_s
 {
 	fz_rect bbox;
@@ -1634,7 +1701,7 @@ struct fz_text_line_s
 	enough to represent a complete line. In cases where multiple
 	font styles are used (for example italics), then a line will be
 	broken down into a series of spans.
-*/ 
+*/
 struct fz_text_span_s
 {
 	fz_rect bbox;
@@ -1646,7 +1713,7 @@ struct fz_text_span_s
 /*
 	fz_text_char: A text char is a unicode character and the bounding
 	box with which it appears on the page.
-*/ 
+*/
 struct fz_text_char_s
 {
 	fz_rect bbox;
@@ -1693,22 +1760,22 @@ void fz_free_text_page(fz_context *ctx, fz_text_page *page);
 
 /*
 	fz_print_text_sheet: Output a text sheet to a file as CSS.
-*/ 
+*/
 void fz_print_text_sheet(fz_context *ctx, FILE *out, fz_text_sheet *sheet);
 
 /*
 	fz_print_text_page_html: Output a page to a file in HTML format.
-*/ 
+*/
 void fz_print_text_page_html(fz_context *ctx, FILE *out, fz_text_page *page);
 
 /*
 	fz_print_text_page_xml: Output a page to a file in XML format.
-*/ 
+*/
 void fz_print_text_page_xml(fz_context *ctx, FILE *out, fz_text_page *page);
 
 /*
 	fz_print_text_page: Output a page to a file in UTF-8 format.
-*/ 
+*/
 void fz_print_text_page(fz_context *ctx, FILE *out, fz_text_page *page);
 
 /*
@@ -1750,12 +1817,15 @@ typedef struct fz_cookie_s fz_cookie;
 	may change from -1 to a positive value once an upper bound is
 	known, so take this into consideration when comparing the
 	value of progress to that of progress_max.
+
+	errors: count of errors during current rendering.
 */
 struct fz_cookie_s
 {
 	int abort;
 	int progress;
 	int progress_max; /* -1 for unknown */
+	int errors;
 };
 
 /*
@@ -1900,7 +1970,7 @@ enum {
 		gotor.new_window: If true, the destination should open in a
 		new window.
 
-	For FZ_LINK_URI:		
+	For FZ_LINK_URI:
 
 		uri.uri: A UTF-8 encoded URI to launch.
 
@@ -2071,6 +2141,16 @@ typedef struct fz_page_s fz_page;
 	filename: a path to a file as it would be given to open(2).
 */
 fz_document *fz_open_document(fz_context *ctx, char *filename);
+
+/*
+	fz_open_document_with_stream: Open a PDF, XPS or CBZ document.
+
+	Open a document using the specified stream object rather than
+	opening a file on disk.
+
+	magic: a string used to detect document type; either a file name or mime-type.
+*/
+fz_document *fz_open_document_with_stream(fz_context *ctx, char *magic, fz_stream *stream);
 
 /*
 	fz_close_document: Close and free an open document.
@@ -2255,16 +2335,17 @@ typedef struct fz_write_options_s fz_write_options;
 */
 struct fz_write_options_s
 {
-	int doascii;    /*	If non-zero then attempt (where possible) to
+	int do_ascii;    /*	If non-zero then attempt (where possible) to
 				make the output ascii. */
-	int doexpand;	/*	Bitflags; each non zero bit indicates an aspect
+	int do_expand;	/*	Bitflags; each non zero bit indicates an aspect
 				of the file that should be 'expanded' on
 				writing. */
-	int dogarbage;	/*	If non-zero then attempt (where possible) to
+	int do_garbage;	/*	If non-zero then attempt (where possible) to
 				garbage collect the file before writing. */
+	int do_linear;   /*	If non-zero then write linearised. */
 };
 
-/*	An enumeration of bitflags to use in the above 'doexpand' field of
+/*	An enumeration of bitflags to use in the above 'do_expand' field of
 	fz_write_options.
 */
 enum
@@ -2290,6 +2371,6 @@ enum
 
 	May throw exceptions.
 */
-void fz_write(fz_document *doc, char *filename, fz_write_options *opts);
+void fz_write_document(fz_document *doc, char *filename, fz_write_options *opts);
 
 #endif

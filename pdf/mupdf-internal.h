@@ -6,6 +6,7 @@
 
 void pdf_set_str_len(pdf_obj *obj, int newlen);
 void *pdf_get_indirect_document(pdf_obj *obj);
+void pdf_set_int(pdf_obj *obj, int i);
 
 /*
  * PDF Images
@@ -113,18 +114,25 @@ typedef struct pdf_lexbuf_large_s pdf_lexbuf_large;
 
 struct pdf_lexbuf_s
 {
+	fz_context *ctx;
 	int size;
+	int base_size;
 	int len;
 	int i;
 	float f;
-	char scratch[PDF_LEXBUF_SMALL];
+	char *scratch;
+	char buffer[PDF_LEXBUF_SMALL];
 };
 
 struct pdf_lexbuf_large_s
 {
 	pdf_lexbuf base;
-	char scratch[PDF_LEXBUF_LARGE - PDF_LEXBUF_SMALL];
+	char buffer[PDF_LEXBUF_LARGE - PDF_LEXBUF_SMALL];
 };
+
+void pdf_lexbuf_init(fz_context *ctx, pdf_lexbuf *lexbuf, int size);
+void pdf_lexbuf_fin(pdf_lexbuf *lexbuf);
+ptrdiff_t pdf_lexbuf_grow(pdf_lexbuf *lexbuf);
 
 int pdf_lex(fz_stream *f, pdf_lexbuf *lexbuf);
 
@@ -132,6 +140,11 @@ pdf_obj *pdf_parse_array(pdf_document *doc, fz_stream *f, pdf_lexbuf *buf);
 pdf_obj *pdf_parse_dict(pdf_document *doc, fz_stream *f, pdf_lexbuf *buf);
 pdf_obj *pdf_parse_stm_obj(pdf_document *doc, fz_stream *f, pdf_lexbuf *buf);
 pdf_obj *pdf_parse_ind_obj(pdf_document *doc, fz_stream *f, pdf_lexbuf *buf, int *num, int *gen, int *stm_ofs);
+
+/*
+	pdf_print_token: print a lexed token to a buffer, growing if necessary
+*/
+void pdf_print_token(fz_context *ctx, fz_buffer *buf, int tok, pdf_lexbuf *lex);
 
 /*
  * xref and object / stream api
@@ -193,7 +206,7 @@ struct pdf_document_s
 };
 
 pdf_document *pdf_open_document_no_run(fz_context *ctx, const char *filename);
-pdf_document *pdf_open_document_no_run_with_stream(fz_stream *file);
+pdf_document *pdf_open_document_no_run_with_stream(fz_context *ctx, fz_stream *file);
 
 void pdf_cache_object(pdf_document *doc, int num, int gen);
 
@@ -209,8 +222,10 @@ fz_stream *pdf_open_raw_renumbered_stream(pdf_document *doc, int num, int gen, i
 
 void pdf_repair_xref(pdf_document *doc, pdf_lexbuf *buf);
 void pdf_repair_obj_stms(pdf_document *doc);
-void pdf_print_xref(pdf_document *);
 void pdf_resize_xref(pdf_document *doc, int newcap);
+pdf_obj *pdf_new_ref(pdf_document *doc, pdf_obj *obj);
+
+void pdf_print_xref(pdf_document *);
 
 /*
  * Encryption
@@ -224,12 +239,15 @@ void pdf_crypt_buffer(fz_context *ctx, pdf_crypt *crypt, fz_buffer *buf, int num
 fz_stream *pdf_open_crypt(fz_stream *chain, pdf_crypt *crypt, int num, int gen);
 fz_stream *pdf_open_crypt_with_filter(fz_stream *chain, pdf_crypt *crypt, char *name, int num, int gen);
 
+int pdf_crypt_version(pdf_document *doc);
 int pdf_crypt_revision(pdf_document *doc);
 char *pdf_crypt_method(pdf_document *doc);
 int pdf_crypt_length(pdf_document *doc);
 unsigned char *pdf_crypt_key(pdf_document *doc);
 
+#ifndef NDEBUG
 void pdf_print_crypt(pdf_crypt *crypt);
+#endif
 
 /*
  * Functions, Colorspaces, Shadings and Images
@@ -237,7 +255,7 @@ void pdf_print_crypt(pdf_crypt *crypt);
 
 typedef struct pdf_function_s pdf_function;
 
-pdf_function *pdf_load_function(pdf_document *doc, pdf_obj *ref);
+pdf_function *pdf_load_function(pdf_document *doc, pdf_obj *ref, int in, int out);
 void pdf_eval_function(fz_context *ctx, pdf_function *func, float *in, int inlen, float *out, int outlen);
 pdf_function *pdf_keep_function(fz_context *ctx, pdf_function *func);
 void pdf_drop_function(fz_context *ctx, pdf_function *func);
@@ -294,8 +312,11 @@ struct pdf_xobject_s
 };
 
 pdf_xobject *pdf_load_xobject(pdf_document *doc, pdf_obj *obj);
+pdf_obj *pdf_new_xobject(pdf_document *doc, fz_rect *bbox, fz_matrix *mat);
 pdf_xobject *pdf_keep_xobject(fz_context *ctx, pdf_xobject *xobj);
 void pdf_drop_xobject(fz_context *ctx, pdf_xobject *xobj);
+void pdf_update_xobject_contents(pdf_document *xref, pdf_xobject *from, fz_buffer *buffer);
+
 
 /*
  * CMap
@@ -347,7 +368,6 @@ void pdf_drop_cmap(fz_context *ctx, pdf_cmap *cmap);
 void pdf_free_cmap_imp(fz_context *ctx, fz_storable *cmap);
 unsigned int pdf_cmap_size(fz_context *ctx, pdf_cmap *cmap);
 
-void pdf_print_cmap(fz_context *ctx, pdf_cmap *cmap);
 int pdf_cmap_wmode(fz_context *ctx, pdf_cmap *cmap);
 void pdf_set_cmap_wmode(fz_context *ctx, pdf_cmap *cmap, int wmode);
 void pdf_set_usecmap(fz_context *ctx, pdf_cmap *cmap, pdf_cmap *usecmap);
@@ -367,6 +387,10 @@ pdf_cmap *pdf_load_cmap(fz_context *ctx, fz_stream *file);
 pdf_cmap *pdf_load_system_cmap(fz_context *ctx, char *name);
 pdf_cmap *pdf_load_builtin_cmap(fz_context *ctx, char *name);
 pdf_cmap *pdf_load_embedded_cmap(pdf_document *doc, pdf_obj *ref);
+
+#ifndef NDEBUG
+void pdf_print_cmap(fz_context *ctx, pdf_cmap *cmap);
+#endif
 
 /*
  * Font
@@ -483,7 +507,9 @@ pdf_font_desc *pdf_new_font_desc(fz_context *ctx);
 pdf_font_desc *pdf_keep_font(fz_context *ctx, pdf_font_desc *fontdesc);
 void pdf_drop_font(fz_context *ctx, pdf_font_desc *font);
 
+#ifndef NDEBUG
 void pdf_print_font(fz_context *ctx, pdf_font_desc *fontdesc);
+#endif
 
 /*
  * Interactive features
